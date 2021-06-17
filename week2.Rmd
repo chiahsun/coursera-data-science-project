@@ -1,0 +1,403 @@
+---
+title: "DataScienceProjectWeek2"
+author: "Chia-Hsun Cheng"
+date: "6/15/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# knitr::opts_chunk$set(cache = TRUE)
+```
+
+## Get Corpora Data
+
+```{r}
+# https://www.coursera.org/learn/data-science-project/supplement/Iimbd/task-0-understanding-the-problem
+zipfile = "./Coursera-SwiftKey.zip"
+# download.file("https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip", zipfile)
+# unzip(zipfile)
+
+list.files("./final")
+list.files("./final/en_US")
+```
+
+## Perform Exploratory Analysis on Corpora
+
+## Analyze Line Count
+
+```{bash}
+wc -l ./final/en_US/en_US.twitter.txt
+wc -l ./final/en_US/en_US.news.txt
+wc -l ./final/en_US/en_US.blogs.txt
+```
+
+```{r}
+library(fpeek)
+options(scipen=999)
+# If you cannot execute the RMarkdown generation for getting the error message 'no function peek_count_lines`, edit this block by adding spaces and execute again
+
+getLineCounts <- function(filename) {
+  return (peek_count_lines(filename)) # This is much faster
+}
+```
+
+| File |Line Count | 
+| :-: | :-: | 
+| en_US.twitter.txt | `r getLineCounts("./final/en_US/en_US.twitter.txt")` |
+| en_US.news.txt | `r getLineCounts("./final/en_US/en_US.news.txt")` |
+| en_US.blogs.txt | `r getLineCounts("./final/en_US/en_US.blogs.txt")` |
+
+### Define Tokenization
+
+```{r, echo = FALSE, eval = FALSE}
+library(stringr)
+str_split(",1", "(?=[,])") # Buggy? So, we cannot use one run of str_split only
+str_split("1,", "(?=[,])")
+str_split("\"You", "(?=[\"])") # Buggy?
+```
+
+```{r}
+library(stringr)
+
+totokens <- function(line) {
+  line <- gsub("’", "'", line)
+  # https://www.rdocumentation.org/packages/stringr/versions/1.4.0/topics/str_split
+  tokens <- str_split(line, "([ ]|(?='m|'re)|(?=[ \\?\\.,!]))", simplify = TRUE)
+  res <- c()
+  for (token in tokens) {
+    # For the above reason, we need to do strsplit again
+    # https://www.rdocumentation.org/packages/base/versions/3.6.2/topics/strsplit
+    res <- c(res, unlist(strsplit(token, "(?=[,\"])", perl=TRUE)))
+  }
+  return (res)
+}
+
+totokens("I'm fine. How're you?")
+totokens(",1")
+totokens("1,")
+totokens("\"This is a really excellent")
+```
+
+### Define Read/Sample Function
+
+```{r}
+readLineByPos <- function(filename, pos) {
+    con <- file(filename, "r")
+    line <- NULL
+    for (i in 1:pos) {
+      line <- readLines(con, n = 1)
+      if (length(line) == 0) {
+        break
+      }
+    }
+    close(con)
+    return (line)
+}
+line <- readLineByPos("./final/en_US/en_US.twitter.txt", 1)
+line
+totokens(line)
+line <- readLineByPos("./final/en_US/en_US.news.txt", 757)
+totokens(line)
+```
+
+Since the corpora is large, we only read a portion of it for efficiency.
+
+We define `random_state` to read random lines of a file to avoid bias.
+
+```{r}
+library(dplyr)
+# We define this function to cache read results
+getReadFunc <- function(filename) {
+  lineCounts <- getLineCounts(filename)
+  con <- file(filename, "r")
+  line <- readLines(con, n = -1)
+  close(con)
+  
+  # Set `random` as TRUE for random
+  # Set `random_state` as the random seed if random is toggled
+  readFunc <- function(lineToRead = Inf, random_state = -1, random = TRUE) {
+    if (is.infinite(lineToRead)) {
+      lineToRead = lineCounts
+    }
+    
+    inSample <- 1:lineToRead
+    if (random) {
+      if (random_state >= 0) {
+          set.seed(random_state) 
+      }
+      inSample <- sample(lineCounts, lineToRead)
+    }
+    return (line[inSample])
+  }
+  return (readFunc)
+}
+readTwitter <- getReadFunc("./final/en_US/en_US.twitter.txt")
+readTwitter(10,  random_state = 1)
+readNews <- getReadFunc("./final/en_US/en_US.news.txt")
+readBlogs <- getReadFunc("./final/en_US/en_US.blogs.txt")
+```
+
+### Analyize Number of Tokens in One Line
+
+```{r}
+getTokenFrame <- function(readFunc, readCount, random_state = -1) {
+  lines <- readFunc(readCount,  random_state = random_state)
+  df <- NULL
+  for (line in lines) {
+    tokens <- totokens(line)
+    # We need to change the type of tokens to list here; otherwise, it would be flattened to several rows
+    df <- bind_rows(df, list(a = line, b = list(tokens))) 
+  }
+
+  colnames(df) <- c("line", "tokens")
+  return (df)
+}
+
+# readCount <- Inf
+readCount <- 1000
+dfTwitter <- getTokenFrame(readTwitter, readCount)
+dfNews <- getTokenFrame(readNews, readCount)
+dfBlogs <- getTokenFrame(readBlogs, readCount)
+```
+
+| |Read Line Count | Word Count |
+| :-: | :-: | :-: |
+| en_US.twitter.txt | `r length(dfTwitter$line)` | `r sum(sapply(dfTwitter$tokens, length))` |
+| en_US.news.txt | `r length(dfNews$line)` | `r sum(sapply(dfNews$tokens, length))` |
+| en_US.blogs.txt | `r length(dfBlogs$line)` | `r sum(sapply(dfBlogs$tokens, length))` |
+
+
+```{r}
+par(mfrow=c(3,1))
+hist(sapply(dfTwitter$tokens, length), xlab="# tokens in one line", main="twitter")
+abline(v=mean(sapply(dfTwitter$tokens, length)), col="blue")
+hist(sapply(dfNews$tokens, length), xlab="# tokens in one line", main="news")
+abline(v=mean(sapply(dfNews$tokens, length)), col="blue")
+hist(sapply(dfBlogs$tokens, length), xlab="# tokens in one line", main="blogs")
+abline(v=mean(sapply(dfBlogs$tokens, length)), col="blue")
+```
+
+If we analyze number of tokens in one line, we observe that blogs > news > twitter
+
+## Get N-Gram
+
+```{r}
+# This function can be optimized
+library(purrr)
+library(tibble)
+getNGramTable <- function(df, N, excludes = c(",", "!", "?", ".", "", " ", "-", "\"", "'"), coverage = 1) {
+  res <- data.frame()
+  cols <- c()
+  for (i in 1:N) {
+    colname <- paste('w', i, sep = "")
+    res[1, colname] <- "?"
+    cols <- c(cols, colname)
+  }
+  template <- as_tibble(res) # tibble is faster than data.frame
+  l <- list()
+  for (i in 1:nrow(df)) {
+    curTokens <- unlist(df[i,]$tokens)
+    now <- template
+    # We skip for line with tokens less than N
+    if (length(curTokens) < N) {
+      next
+    }
+    for (k in 1:(length(curTokens)-N+1)) {
+      segment <- curTokens[k:(k+N-1)]
+      if (any(segment %in% excludes)) {
+        next
+      }
+      now <- bind_rows(now, set_names(segment, colnames(res))) 
+    }
+    now <- slice(now, -1)
+    l[[length(l)+1]] <- now
+  }
+  
+  # It's faster to have several tibbles combine afterwards 
+  res <- bind_rows(l)
+  # We cannot use res[-1,] since for 1-dimension, it would become vector after transformation
+  res <- res %>% slice(-1)
+  nGramTable <- res %>%
+    group_by_at(cols) %>%
+    summarize(count = n()) %>%
+    arrange(desc(count))
+  
+  total <- sum(nGramTable$count)
+  nGramTable <- nGramTable %>%
+    mutate(prob = count/total)
+  
+  # Remove based on coverage
+  if (coverage < 1) {
+    for (i in 1:nrow(nGramTable)) {
+      if (sum(nGramTable$prob[1:i]) >= coverage) {
+        nGramTable = nGramTable[1:i, ]
+        break
+      }
+    } 
+  }
+  
+  return (nGramTable)
+}
+head(getNGramTable(dfTwitter, 1))
+
+# Performance test
+# start_time <- Sys.time()
+# getNGramTable(getTokenFrame(readTwitter, 1000, random_state = 1), 1)
+# end_time <- Sys.time()
+# end_time - start_time
+```
+
+We define the `getNGramTable` function to get N-gram from the data frame with probability.
+
+### Word Freqeuncy
+
+```{r}
+table1Twitter <- getNGramTable(dfTwitter, 1)
+table1News <- getNGramTable(dfNews, 1)
+table1Blogs <- getNGramTable(dfBlogs, 1)
+```
+
+```{r}
+par(mfrow=c(3,1))
+plot(table(table1Twitter$count), main = "twitter", xlab = "# occurs per word", ylab = "count")
+plot(table(table1News$count), main = "news", xlab = "# occurs per word", ylab = "count")
+plot(table(table1Blogs$count), main = "blogs", xlab = "# occurs per word", ylab = "count")
+```
+
+```{r}
+topN <- 5
+ratio <- sum(table(table1Twitter$count)[1:topN])/sum(table(table1Twitter$count))
+ratio
+```
+
+We observe that some words occur very frequently, while many of them occurs only seldom times.
+
+Top `r topN` frequent words dominates `r ratio*100`% of all the counts. 
+
+
+## Determine the Size of the Model
+
+How do we determine how many lines to read for the corpora to make the model representable?
+
+One criteria we adopted here is that if we read by two different `random_state` of the file, the model we built for the old model has an acceptable coverage on the new model.
+
+```{r}
+coverage <- 0.8
+```
+
+We use `r coverage` for coverage.
+
+```{r}
+linesToReadForModel <- 1000
+for (readCount in seq(linesToReadForModel, 20000, by=100)) {
+  existedTable <- getNGramTable(getTokenFrame(readTwitter, readCount, random_state = 1), 1)
+  newTable <- getNGramTable(getTokenFrame(readTwitter, readCount, random_state = 2), 1)
+  now <- sum((newTable$w1 %in% existedTable$w1)*newTable$count)/sum(newTable$count)
+  # message("now: ", now)
+  if (now > coverage) {
+    linesToReadForModel <- readCount
+    break
+  }
+}
+linesToReadForModel
+```
+
+We use `r linesToReadForModel` lines for building our model for the target coverage `r coverage`.
+
+## Most Frequent Words
+
+After we define the coverage, we can go on having a basic understanding of more frequent N-grams in our corpora.
+
+```{r}
+dfTwitter <- getTokenFrame(readTwitter, linesToReadForModel)
+dfNews <- getTokenFrame(readNews, linesToReadForModel)
+dfBlogs <- getTokenFrame(readBlogs, linesToReadForModel)
+table1Twitter <- getNGramTable(dfTwitter, 1)
+table1News <- getNGramTable(dfNews, 1)
+table1Blogs <- getNGramTable(dfBlogs, 1)
+```
+
+We build the 1-gram table for each text source and arrange by word frequency, so that we can observe frequent words in difference sources.
+
+| | Frequent Words |
+| :-: | :-: | :-: |
+| en_US.twitter.txt | `r table1Twitter$w1[1:10]` |
+| en_US.news.txt | `r table1News$w1[1:10]` | 
+| en_US.blogs.txt | `r table1Blogs$w1[1:10]` | 
+
+2-gram table
+
+```{r}
+table2Twitter <- getNGramTable(dfTwitter, 2)
+table2News <- getNGramTable(dfNews, 2)
+table2Blogs <- getNGramTable(dfBlogs, 2)
+table2 <- rbind(table2Twitter, table2News, table2Blogs)
+```
+
+| | Frequent Words |
+| :-: | :-: | :-: |
+| en_US.twitter.txt | `r sapply(1:5, function(x) { paste(table2Twitter$w1[x], table2Twitter$w2[x]) })` |
+| en_US.news.txt | `r sapply(1:5, function(x) { paste(table2News$w1[x], table2Twitter$w2[x]) })` | 
+| en_US.blogs.txt | `r sapply(1:5, function(x) { paste(table2Blogs$w1[x], table2Twitter$w2[x]) })` | 
+
+3-gram table
+
+```{r}
+table3Twitter <- getNGramTable(dfTwitter, 3)
+table3News <- getNGramTable(dfNews, 3)
+table3Blogs <- getNGramTable(dfBlogs, 3)
+table3 <- rbind(table3Twitter, table3News, table3Blogs)
+```
+
+| | Frequent Words |
+| :-: | :-: | :-: |
+| en_US.twitter.txt | `r sapply(1:5, function(x) { paste(table3Twitter$w1[x], table3Twitter$w2[x], table3Twitter$w3[x])})` |
+| en_US.news.txt | `r sapply(1:5, function(x) { paste(table3News$w1[x], table3News$w2[x], table3News$w3[x]) })` | 
+| en_US.blogs.txt | `r sapply(1:5, function(x) { paste(table3Blogs$w1[x], table3Blogs$w2[x], table3Blogs$w3[x])})` | 
+
+## Predict using N-gram Table
+
+For a simple prediction algorithm, we can use matched N-1 grams for N grams table to predict the next word.
+
+```{r}
+getTableToUse <- function(tables, words) {
+  for (table in tables) {
+    numGram <- sum(grepl("w[0-9]+", colnames(table)))  
+    if ((length(words)+1) == numGram) {
+      return (table)
+    }
+  }
+  return (NULL)
+}
+
+predict <- function(tables, words) {
+  table <- getTableToUse(tables, words)
+  if (is.null(table)) {
+    stop("Unable to find table to use for length: ", length(words))
+  }
+  for (i in 1:length(words)) {
+    # https://dplyr.tidyverse.org/reference/filter.html
+    # https://stackoverflow.com/questions/46397148/dplyr-filter-by-the-first-column
+    table <- table %>%
+      filter_at(i,  all_vars(. == words[i]))
+  }
+  N = length(words)
+  nxtCol = paste("w", N+1, sep="")
+  table <- table %>%
+       mutate(dprob = prob , nxt = .data[[nxtCol]]) 
+  total <- sum(table$dprob)
+  table$dprob <- table$dprob/total
+    
+  return (table)
+}
+
+# We need to pass list; otherwise, c(table1, table2) would combine tables
+predict(list(table2, table3), c("in"))
+predict(list(table2, table3), c("in", "the"))
+```
+
+* `nxt` is the predicted word
+* `dprob` is the conditional probability under the N-1 gram
+
+After we have the simple prediction function, we can apply it to develop our Shiny app.
